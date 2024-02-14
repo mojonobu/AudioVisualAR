@@ -5,6 +5,7 @@ using Unity.Collections;
 using Unity.Collections.LowLevel.Unsafe;
 using UnityEngine.XR.ARFoundation;
 using UnityEngine.XR.ARSubsystems;
+using UnityEngine.UI;
 
 /// <summary>
 /// https://qiita.com/Tanktop_in_Feb/items/55201612a8b449800100
@@ -15,14 +16,15 @@ using UnityEngine.XR.ARSubsystems;
 [RequireComponent(typeof(ARCameraManager))]
 public class PeopleOcclusionPostEffect : MonoBehaviour
 {
-    [SerializeField] private ARSessionOrigin m_arOrigin = null;
-    [SerializeField] private ARHumanBodyManager m_humanBodyManager = null;
+    [SerializeField] private AROcclusionManager m_occlusionManager = null;
     [SerializeField] private ARCameraManager m_cameraManager = null;
     [SerializeField] private Shader m_peopleOcclusionShader = null;
     [SerializeField] Texture2D testTexture;
 
     private Texture2D m_cameraFeedTexture = null;
     private Material m_material = null;
+
+    delegate bool TryAcquireDepthImageDelegate(out XRCpuImage image);
 
     void Awake()
     {
@@ -75,39 +77,36 @@ public class PeopleOcclusionPostEffect : MonoBehaviour
     private void OnCameraFrameReceived(ARCameraFrameEventArgs eventArgs)
     {
         RefreshCameraFeedTexture();
+        UpdateDepthImage(m_occlusionManager.TryAcquireHumanStencilCpuImage, m_RawHumanStencilImage);
+
+    }
+    /// <summary>
+    /// Calls <paramref name="tryAcquireDepthImageDelegate"/> and renders the resulting depth image contents to <paramref name="rawImage"/>.
+    /// </summary>
+    /// <param name="tryAcquireDepthImageDelegate">The method to call to acquire a depth image.</param>
+    /// <param name="rawImage">The Raw Image to use to render the depth image to the screen.</param>
+    void UpdateDepthImage(TryAcquireDepthImageDelegate tryAcquireDepthImageDelegate, RawImage rawImage)
+    {
+        if (tryAcquireDepthImageDelegate(out XRCpuImage cpuImage))
+        {
+            // XRCpuImages, if successfully acquired, must be disposed.
+            // You can do this with a using statement as shown below, or by calling its Dispose() method directly.
+            using (cpuImage)
+            {
+                UpdateRawImage(rawImage, cpuImage, m_Transformation);
+            }
+        }
+        else
+        {
+            rawImage.enabled = false;
+        }
     }
 
     // background
     private void RefreshCameraFeedTexture()
     {
-        XRCameraImage cameraImage;
-        m_cameraManager.TryGetLatestImage(out cameraImage);
-        if (m_cameraFeedTexture == null || m_cameraFeedTexture.width != cameraImage.width || m_cameraFeedTexture.height != cameraImage.height)
-        {
-            m_cameraFeedTexture = new Texture2D(cameraImage.width, cameraImage.height, TextureFormat.RGBA32, false);
-            // m_cameraFeedTexture = new Texture2D(Screen.width, Screen.height, TextureFormat.RGBA32, false);
-        }
-
-        CameraImageTransformation imageTransformation = Input.deviceOrientation == DeviceOrientation.LandscapeRight ? CameraImageTransformation.MirrorY : CameraImageTransformation.MirrorX;
-        XRCameraImageConversionParams conversionParams = new XRCameraImageConversionParams(cameraImage, TextureFormat.RGBA32, imageTransformation);
-
-        NativeArray<byte> rawTextureData = m_cameraFeedTexture.GetRawTextureData<byte>();
-
-        try
-        {
-            unsafe
-            {
-                cameraImage.Convert(conversionParams, new IntPtr(rawTextureData.GetUnsafePtr()), rawTextureData.Length);
-            }
-        }
-        finally
-        {
-            cameraImage.Dispose();
-        }
-
-        m_cameraFeedTexture.Apply();
+        // get CPUImage(deleted)
         m_material.SetTexture("_CameraFeed", testTexture);
-
     }
 
     private float CalculateUVMultiplierLandScape(Texture2D cameraTexture)
@@ -123,5 +122,40 @@ public class PeopleOcclusionPostEffect : MonoBehaviour
         float cameraTextureAspect = (float)cameraTexture.width / (float)cameraTexture.height;
         return screenAspect / cameraTextureAspect;
 
+    }
+
+    static void UpdateRawImage(RawImage rawImage, XRCpuImage cpuImage, XRCpuImage.Transformation transformation)
+    {
+        // Get the texture associated with the UI.RawImage that we wish to display on screen.
+        var texture = rawImage.texture as Texture2D;
+
+        // If the texture hasn't yet been created, or if its dimensions have changed, (re)create the texture.
+        // Note: Although texture dimensions do not normally change frame-to-frame, they can change in response to
+        //    a change in the camera resolution (for camera images) or changes to the quality of the human depth
+        //    and human stencil buffers.
+        if (texture == null || texture.width != cpuImage.width || texture.height != cpuImage.height)
+        {
+            texture = new Texture2D(cpuImage.width, cpuImage.height, cpuImage.format.AsTextureFormat(), false);
+            rawImage.texture = texture;
+        }
+
+        // For display, we need to mirror about the vertical access.
+        var conversionParams = new XRCpuImage.ConversionParams(cpuImage, cpuImage.format.AsTextureFormat(), transformation);
+
+        // Get the Texture2D's underlying pixel buffer.
+        var rawTextureData = texture.GetRawTextureData<byte>();
+
+        // Make sure the destination buffer is large enough to hold the converted data (they should be the same size)
+        Debug.Assert(rawTextureData.Length == cpuImage.GetConvertedDataSize(conversionParams.outputDimensions, conversionParams.outputFormat),
+            "The Texture2D is not the same size as the converted data.");
+
+        // Perform the conversion.
+        cpuImage.Convert(conversionParams, rawTextureData);
+
+        // "Apply" the new pixel data to the Texture2D.
+        texture.Apply();
+
+        // Make sure it's enabled.
+        rawImage.enabled = true;
     }
 }
