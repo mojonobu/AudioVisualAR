@@ -1,4 +1,4 @@
-
+﻿
 using UnityEngine;
 using System;
 using Unity.Collections;
@@ -23,6 +23,10 @@ public class PeopleOcclusionPostEffect : MonoBehaviour
 
     private Texture2D m_cameraFeedTexture = null;
     private Material m_material = null;
+    private RawImage m_RawHumanDepthImage = null;
+    private RawImage m_RawHumanStencilImage = null;
+
+    XRCpuImage.Transformation m_Transformation = XRCpuImage.Transformation.MirrorY;
 
     delegate bool TryAcquireDepthImageDelegate(out XRCpuImage image);
 
@@ -66,8 +70,8 @@ public class PeopleOcclusionPostEffect : MonoBehaviour
         }
 
 
-        m_material.SetTexture("_OcclusionDepth", m_humanBodyManager.humanDepthTexture);
-        m_material.SetTexture("_OcclusionStencil", m_humanBodyManager.humanStencilTexture);
+        m_material.SetTexture("_OcclusionDepth", m_RawHumanDepthImage.texture);
+        m_material.SetTexture("_OcclusionStencil", m_RawHumanStencilImage.texture);
 
         // m_material.SetFloat("_ARWorldScale", 1f/m_arOrigin.transform.localScale.x);
 
@@ -77,6 +81,7 @@ public class PeopleOcclusionPostEffect : MonoBehaviour
     private void OnCameraFrameReceived(ARCameraFrameEventArgs eventArgs)
     {
         RefreshCameraFeedTexture();
+        UpdateDepthImage(m_occlusionManager.TryAcquireHumanDepthCpuImage, m_RawHumanDepthImage);
         UpdateDepthImage(m_occlusionManager.TryAcquireHumanStencilCpuImage, m_RawHumanStencilImage);
 
     }
